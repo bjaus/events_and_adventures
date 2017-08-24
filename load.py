@@ -16,22 +16,27 @@ import pandas as pd
 # Supply info.py with:
 # - Google Gecoding API Key
 # - Username and Password for Events and Adventures
-from info import GOOGLE_MAPS_KEY, EA_USERNAME, EA_PASSWORD
+# - Home Addresss
+# - Work Address
+from info import (GOOGLE_MAPS_KEY, EA_USERNAME,
+                  EA_PASSWORD, HOME, WORK)
 
 
 class EALoader(object):
 
     def __init__(self):
         # Constant Variables
-        self._output_fields = ['sign_up', 'wait_list','event_name', 'event_location', 'event_status', 'member_status',
-                               'signup_before', 'cancel_before', 'event_date', 'host', 'event_type', 'duration', 'attire',
-                               'attendees', 'venue_cost', 'event_cost', 'event_tax', 'street', 'city', 'state', 'zip',
-                               'raw_address', 'sitename', 'url',  
+        self._output_fields = ['attending', 'sign_up', 'wait_list', 'cancel', 'event_name', 'event_location', 'event_status',
+                               'member_status', 'signup_before', 'cancel_before', 'event_date', 'event_day', 'host', 'event_type',
+                               'duration', 'attire', 'attendees', 'venue_cost', 'event_cost', 'event_tax', 'street', 'city', 'state',
+                               'zip', 'raw_address', 'sitename', 'url', 
         ]
 
         self._month_dict = {'January': 1, 'February': 2, 'March': 3, 'April': 4, 'May': 5, 'June': 6, 'July': 7,
                             'August': 8, 'September': 9, 'October': 10, 'November': 11, 'December': 12
         }
+
+        self._weekday_dict = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday', 4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
 
         # Regular Expression Patterns
         self._date_regex = re.compile(
@@ -58,31 +63,6 @@ class EALoader(object):
         self.dframe = self._produce_dataframe()
 
 
-    def write_csv(self):
-        today = date.today()
-        filename = 'events_and_adventures_{}{}{}'.format(today.year, today.month, today.day)
-        directory = os.path.join(os.getcwd(), 'output')
-        if not os.path.exists(directory):
-            os.mkdir(directory)
-        filepath = os.path.join(directory, filename)
-        self.dframe.to_csv(filepath, encoding='utf-8')
-
-
-    def _produce_dataframe(self):
-        df = pd.DataFrame(self._data, columns=self._output_fields)
-        df = df.loc[df.event_status.str.strip().str.lower() != 'event has passed']
-        df = df.loc[df.member_status.str.strip().str.lower() != 'you canceled']
-        df = df.loc[df.event_date > pd.Timestamp.now()]
-        df = df.loc[df.signup_before > pd.Timestamp.now()]
-
-        df.loc[df.member_status.str.strip().str.lower() == 'you are signed up', 'sign_up'] = 'X'
-        df = df.sort_values(by=[
-            'sign_up', 'wait_list', 'signup_before', 'event_cost',
-        ], ascending=[True, True, True, True])
-
-        return df
-
-
     def _parse_payload(self):
         res = requests.get(self._login_url)
         soup = BeautifulSoup(res.content, 'html.parser')
@@ -100,53 +80,14 @@ class EALoader(object):
         return payload
 
 
-    def _extract_event_details(self):
-        data = list()
-        with requests.Session() as session:
-            post = session.post(self._login_url, data=self._payload)
-            for link in self._events:
-                request = session.get(link)
-                soup = BeautifulSoup(request.content, 'html.parser')
-
-                event_name, event_location = self._parse_event(soup.find(id='contentMain_eventnamelocation'))
-                print('-> {}'.format(event_name))
-
-                event_status = soup.find(id='contentMain_eventstatus').text.strip().encode('utf-8')
-                member_status = soup.find(id='contentMain_signupstatus').text.strip()
-                event_date = self._parse_date(soup.find(id='contentMain_datetime').text)
-                signup_before = self._parse_date(soup.find(id='contentMain_signupbefore').text)
-                cancel_before = self._parse_date(soup.find(id='contentMain_cancelbefore').text)
-                host = soup.find(id='contentMain_hosts').text.replace('[Photo]', '').strip()
-                event_type = soup.find(id='contentMain_eventtype').text.strip()
-                duration = soup.find(id='contentMain_duration').text.strip()
-                attire = soup.find(id='contentMain_attire').text.strip()
-                attendees = soup.find(id='contentMain_memberlimit').text.strip()
-                venue_cost = soup.find(id='contentMain_venuecost').text.strip()
-                event_cost = soup.find(id='contentMain_eventcost').text.strip()
-                event_tax = soup.find(id='contentMain_eventtax').text.strip()
-                
-                address = soup.find(id='contentMain_venueaddress').text.strip()
-                street, city, state, code = self._parse_address(address)
-                if street or city or state:
-                    address = None
-                
-                sitename = soup.find(id='contentMain_sitename').text.strip()
-                
-                items = (None, None, event_name, event_location, event_status, member_status, signup_before, cancel_before,
-                         event_date, host, event_type, duration, attire, attendees, venue_cost, event_cost, event_tax, street,
-                         city, state, code, address, sitename, link)
-                data.append(items)
-        return data
-
-
     def _get_event_links(self):
         # Login to Events and Adventures
         driver = webdriver.Chrome('./chromedriver')
         driver.get(self._login_url)
         username = driver.find_element_by_id('contentMain_username')
-        username.send_keys('brandon.jaus@gmail.com')
+        username.send_keys(EA_USERNAME)
         password = driver.find_element_by_id('contentMain_password')
-        password.send_keys('Afgh@n!st@n20!!')
+        password.send_keys(EA_PASSWORD)
         submit = driver.find_element_by_id('contentMain_btnSubmit')
         submit.click()
         
@@ -162,12 +103,7 @@ class EALoader(object):
 
 
         # Parse events for next month
-        today = date.today()
-        year, month = today.year, today.month
-        month += 1
-        if month > 12:
-            month %= 12
-            year += 1
+        year, month = self._produce_date(1)
         select = Select(driver.find_element_by_id('contentMain_lstmonths'))
         select.select_by_value('{}/1/{}'.format(month, year))
         events = driver.find_elements_by_class_name('calevent')
@@ -176,11 +112,7 @@ class EALoader(object):
             event_links.append(link)
 
         # Parse events two months out
-        year, month = today.year, today.month
-        month += 2
-        if month > 12:
-            month %= 12
-            year += 1
+        year, month = self._produce_date(2)
         select = Select(driver.find_element_by_id('contentMain_lstmonths'))
         select.select_by_value('{}/1/{}'.format(month, year))
         events = driver.find_elements_by_class_name('calevent')
@@ -191,6 +123,99 @@ class EALoader(object):
         driver.close()
         return event_links
 
+
+    def _produce_dataframe(self):
+        df = pd.DataFrame(self._data, columns=self._output_fields)
+
+        df.loc[df.member_status.str.strip().str.lower() == 'you are signed up', 'attending'] = 'X'
+        df = df.sort_values(by=['sitename', 'member_status', 'event_status', 'signup_before', 'event_cost', 'event_date'],
+                            ascending=[True, False, True, True, True, True])
+
+        return df
+
+
+    def _extract_event_details(self):
+        data = list()
+        with requests.Session() as session:
+            post = session.post(self._login_url, data=self._payload)
+            for link in self._events:
+                request = session.get(link)
+                soup = BeautifulSoup(request.content, 'html.parser')
+
+                event_status = soup.find(id='contentMain_eventstatus').text.strip().encode('utf-8')
+                if event_status.lower() == 'event has passed':
+                    continue
+
+                member_status = soup.find(id='contentMain_signupstatus').text.strip()
+                if member_status.lower() == 'you canceled':
+                    continue
+
+                event_date = self._parse_date(soup.find(id='contentMain_datetime').text)
+                if event_date < datetime.now():
+                    continue
+
+                signup_before = self._parse_date(soup.find(id='contentMain_signupbefore').text)
+                if signup_before < datetime.now():
+                    continue
+
+                event_name, event_location = self._parse_event(soup.find(id='contentMain_eventnamelocation'))
+                if 'New Member' in event_name:
+                    continue
+
+                print('-> {}'.format(event_name))
+
+                event_day = self._weekday_dict.get(event_date.weekday(), None)
+                cancel_before = self._parse_date(soup.find(id='contentMain_cancelbefore').text)
+                host = soup.find(id='contentMain_hosts').text.replace('[Photo]', '').strip()
+                event_type = soup.find(id='contentMain_eventtype').text.strip()
+                duration = soup.find(id='contentMain_duration').text.strip()
+                attire = soup.find(id='contentMain_attire').text.strip()
+
+                # Get current number of people signed up
+                attendees = None # Found on Sign Up Page
+                attendee_limit = soup.find(id='contentMain_memberlimit').text.strip()
+                spots_left = None # attendees - attendee_limit (if limited) else None
+
+                # Verify cost on Signup Page
+                venue_cost = soup.find(id='contentMain_venuecost').text.strip()
+                event_cost = soup.find(id='contentMain_eventcost').text.strip()
+                event_tax = soup.find(id='contentMain_eventtax').text.strip()
+                
+                address = soup.find(id='contentMain_venueaddress').text.strip()
+
+                # Use Google Maps API to determine distance
+                dist_from_work = self._extract_distance(WORK, address)
+                dist_from_home = self._extract_distance(HOME, address)
+
+                street, city, state, code = self._parse_address(address)
+                if street or city or state:
+                    address = None
+                
+                sitename = soup.find(id='contentMain_sitename').text.strip()
+                
+                items = (None, None, None, None, event_name, event_location, event_status, member_status, signup_before,
+                         cancel_before, event_date, event_day, host, event_type, duration, attire, attendees, venue_cost,
+                         event_cost, event_tax, street, city, state, code, address, sitename, link)
+                data.append(items)
+        return data
+
+    ########################
+    #### Helper Methods ####
+    ########################
+
+    def _produce_date(self, num):
+        today = date.today()
+        year, month = today.year, today.month
+
+        month += num
+        if month > 12:
+            month %= 12
+            year += 1
+        return year, month
+
+    ########################
+    #### Parser Methods ####
+    ########################
 
     def _parse_date(self, dstr):
         match = re.findall(self._date_regex, dstr)
@@ -232,6 +257,37 @@ class EALoader(object):
             return street, city, state, zcode
         else:
             return None, None, None, None
+
+
+    def _extract_distance(self, addr1, addr2):
+        pass
+    #     distances = []
+    #     res = self._map.distance_matrix(addr1, addr2)
+    #     if res:
+    #         try:
+    #             status = res.get('rows')[0].get('elements')[0].get('status')
+    #             if status.lower() == 'not_found':
+    #                 return None
+    #             disances.append(res)
+    #         except TypeError:
+    #             return None
+    #         else:
+
+    #     return distances or None
+
+
+    ######################
+    #### MISC Methods ####
+    ######################
+
+    def write_csv(self):
+        today = date.today()
+        filename = 'events_and_adventures_{}{}{}'.format(today.year, today.month, today.day)
+        directory = os.path.join(os.getcwd(), 'output')
+        if not os.path.exists(directory):
+            os.mkdir(directory)
+        filepath = os.path.join(directory, filename)
+        self.dframe.to_csv(filepath, encoding='utf-8')
 
 
     def _get_soup(self, url):
