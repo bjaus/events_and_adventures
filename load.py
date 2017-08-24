@@ -23,10 +23,10 @@ class EALoader(object):
 
     def __init__(self):
         # Constant Variables
-        self._output_fields = ['event_name', 'event_location', 'event_status', 'member_status', 'signup_before',
-                               'cancel_before', 'event_date', 'host', 'event_type', 'duration', 'attire',
-                               'attendees', 'venue_cost', 'event_cost', 'event_tax', 'street', 'city', 'state',
-                               'zip', 'raw_address', 'sitename', 'url', 'sign_up', 
+        self._output_fields = ['sign_up', 'wait_list','event_name', 'event_location', 'event_status', 'member_status',
+                               'signup_before', 'cancel_before', 'event_date', 'host', 'event_type', 'duration', 'attire',
+                               'attendees', 'venue_cost', 'event_cost', 'event_tax', 'street', 'city', 'state', 'zip',
+                               'raw_address', 'sitename', 'url',  
         ]
 
         self._month_dict = {'January': 1, 'February': 2, 'March': 3, 'April': 4, 'May': 5, 'June': 6, 'July': 7,
@@ -43,29 +43,44 @@ class EALoader(object):
         # Google Map API
         self._map = googlemaps.Client(GOOGLE_MAPS_KEY)
 
-        # Events & Adventures URLs
+        # Events & Adventures URL
         self._login_url = 'https://singles.eventsandadventures.com/website/logon.aspx'
-        self._url = 'https://singles.eventsandadventures.com/member/{}'
 
         print('Creating Payload...')
         self._payload = self._parse_payload()
         
         print('Gathering Event Links...')
-        self.events = self._get_event_links()
+        self._events = self._get_event_links()
 
         print('Parsing Data...')
-        self.data = self._extract_event_details()
-        self.dframe = pd.DataFrame(self.data, columns=self._output_fields)
+        self._data = self._extract_event_details()
+
+        self.dframe = self._produce_dataframe()
 
 
-    def write(self):
+    def write_csv(self):
         today = date.today()
         filename = 'events_and_adventures_{}{}{}'.format(today.year, today.month, today.day)
         directory = os.path.join(os.getcwd(), 'output')
-        if not os.path.exists():
+        if not os.path.exists(directory):
             os.mkdir(directory)
         filepath = os.path.join(directory, filename)
-        self.dframe.to_csv(filepath)
+        self.dframe.to_csv(filepath, encoding='utf-8')
+
+
+    def _produce_dataframe(self):
+        df = pd.DataFrame(self._data, columns=self._output_fields)
+        df = df.loc[df.event_status.str.strip().str.lower() != 'event has passed']
+        df = df.loc[df.member_status.str.strip().str.lower() != 'you canceled']
+        df = df.loc[df.event_date > pd.Timestamp.now()]
+        df = df.loc[df.signup_before > pd.Timestamp.now()]
+
+        df.loc[df.member_status.str.strip().str.lower() == 'you are signed up', 'sign_up'] = 'X'
+        df = df.sort_values(by=[
+            'sign_up', 'wait_list', 'signup_before', 'event_cost',
+        ], ascending=[True, True, True, True])
+
+        return df
 
 
     def _parse_payload(self):
@@ -89,14 +104,14 @@ class EALoader(object):
         data = list()
         with requests.Session() as session:
             post = session.post(self._login_url, data=self._payload)
-            for link in self.events:
+            for link in self._events:
                 request = session.get(link)
                 soup = BeautifulSoup(request.content, 'html.parser')
 
                 event_name, event_location = self._parse_event(soup.find(id='contentMain_eventnamelocation'))
                 print('-> {}'.format(event_name))
 
-                event_status = soup.find(id='contentMain_eventstatus').text.strip()
+                event_status = soup.find(id='contentMain_eventstatus').text.strip().encode('utf-8')
                 member_status = soup.find(id='contentMain_signupstatus').text.strip()
                 event_date = self._parse_date(soup.find(id='contentMain_datetime').text)
                 signup_before = self._parse_date(soup.find(id='contentMain_signupbefore').text)
@@ -117,9 +132,9 @@ class EALoader(object):
                 
                 sitename = soup.find(id='contentMain_sitename').text.strip()
                 
-                items = (event_name, event_location, event_status, member_status, signup_before, cancel_before, event_date,
-                         host, event_type, duration, attire, attendees, venue_cost, event_cost, event_tax, street,
-                         city, state, code, address, sitename, link, None)
+                items = (None, None, event_name, event_location, event_status, member_status, signup_before, cancel_before,
+                         event_date, host, event_type, duration, attire, attendees, venue_cost, event_cost, event_tax, street,
+                         city, state, code, address, sitename, link)
                 data.append(items)
         return data
 
@@ -160,6 +175,19 @@ class EALoader(object):
             link = event.get_attribute('href')
             event_links.append(link)
 
+        # Parse events two months out
+        year, month = today.year, today.month
+        month += 2
+        if month > 12:
+            month %= 12
+            year += 1
+        select = Select(driver.find_element_by_id('contentMain_lstmonths'))
+        select.select_by_value('{}/1/{}'.format(month, year))
+        events = driver.find_elements_by_class_name('calevent')
+        for event in events:
+            link = event.get_attribute('href')
+            event_links.append(link)
+
         driver.close()
         return event_links
 
@@ -175,8 +203,8 @@ class EALoader(object):
 
 
     def _parse_event(self, tag):
-        location = tag.find('br').text
-        name = tag.text.replace(location, '')
+        location = tag.find('br').text.strip()
+        name = tag.text.replace(location, '', 1).strip()
         return name.strip(), location.strip()
 
 
