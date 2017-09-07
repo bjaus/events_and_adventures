@@ -99,8 +99,7 @@ class EALoader(object):
         submit.click()
         
         # Get to the Calendar
-        cal = driver.find_element_by_id('PublicNav1_lnkCalendar')
-        cal.click()
+
         
         # Parse events for current month
         event_links = []
@@ -155,22 +154,22 @@ class EALoader(object):
 
                 event_date = self._parse_date(soup.find(id='contentMain_datetime').text)
                 if event_date < datetime.now():
-                    print('-> {:>9}: {}'.format('Passed', event_name))
+                    # print('-> {:>9}: {}'.format('Passed', event_name))
                     continue
 
                 event_status = soup.find(id='contentMain_eventstatus').text.strip().encode('utf-8')
                 if event_status.lower() == 'event has passed':
-                    print('-> {:>9}: {}'.format('Passed', event_name))
+                    # print('-> {:>9}: {}'.format('Passed', event_name))
                     continue
 
                 member_status = soup.find(id='contentMain_signupstatus').text.strip()
                 if member_status.lower() == 'you canceled':
-                    print('-> {:>9}: {}'.format('Cancelled', event_name))
+                    # print('-> {:>9}: {}'.format('Cancelled', event_name))
                     continue
 
                 signup_before = self._parse_date(soup.find(id='contentMain_signupbefore').text)
                 if signup_before < datetime.now():
-                    print('-> {:>9}: {}'.format('Closed', event_name))
+                    # print('-> {:>9}: {}'.format('Closed', event_name))
                     continue
 
                 if 'full' in event_status.lower():
@@ -215,6 +214,7 @@ class EALoader(object):
                          city, state, code, address, sitename, link)
                 data.append(items)
         return data
+
 
     ########################
     #### Parser Methods ####
@@ -281,11 +281,12 @@ class EALoader(object):
             else:
                 minutes += int(time.split(' ')[0])
 
-            miles = '{:,.2f} miles'.format(miles)
-            minutes = '{:,} minutes'.format(minutes)
+            miles = Decimal(miles)
+            minutes = Decimal(minutes)
             return miles, minutes
         except TypeError:
             return None, None
+
 
     ########################
     #### Helper Methods ####
@@ -329,65 +330,67 @@ class EALoader(object):
         return df
 
     def _range_writer(self, df, col, directory):
-        nums = [10, 15, 20, 25, 30, 35, 45, 50, 100]
+        nums = [10, 15, 20, 25, 30, 40, 50, 60, 100]
         DF = df.copy()
         file_col = col.replace('_', ' ')
+        col_num = '{}_num'.format(col)
         for idx, num in enumerate(nums):
             outputs = []
             if idx == 0:
                 filename = '{} less than {}.csv'.format(file_col, num)
-                df = DF.loc[DF[col+'_num'] < num]
+                df = DF.loc[DF[col_num] < num]
                 if df.shape[0]:
                     outputs.append([filename, df])
             elif idx == len(nums) - 1:
                 filename = '{} greater than {}.csv'.format(file_col, num)
-                df = DF.loc[DF[col+'_num'] > num]
+                df = DF.loc[DF[col_num] > num]
                 if df.shape[0]:
                     outputs.append([filename, df])
                 n1, n2 = nums[idx-1], nums[idx]
                 filename = '{} between {} and {}.csv'.format(file_col, n1, n2)
-                df = DF.loc[(DF[col+'_num'] > n1) & (DF[col+'_num'] < n2)]
+                df = DF.loc[(DF[col_num] > n1) & (DF[col_num] < n2)]
                 if df.shape[0]:
                     outputs.append([filename, df]) 
             else:
                 n1, n2 = nums[idx-1], nums[idx]
                 filename = '{} between {} and {}.csv'.format(file_col, n1, n2)
-                df = DF.loc[(DF[col+'_num'] > n1) & (DF[col+'_num'] < n2)]
+                df = DF.loc[(DF[col_num] > n1) & (DF[col_num] < n2)]
                 if df.shape[0]:
                     outputs.append([filename, df]) 
 
             for filename, df in outputs:
                 filepath = os.path.join(directory, filename)
-                df.iloc[:, 4:-4].to_csv(filepath, encoding='utf-8')
+                df.iloc[:, 4:-4].to_csv(filepath, encoding='utf-8', index=False)
 
 
     ######################
     #### MISC Methods ####
     ######################
 
-    def write_files(self):
-        today = date.today()
-        filename = 'events_and_adventures_{}{}{}'.format(today.year, today.month, today.day)
+    def write_files(self, all=False):
+        print('\nWriting Files...')
+        filename = 'events_and_adventures.csv'
         base = os.path.join(os.getcwd(), 'output')
         if not os.path.exists(base):
             os.mkdir(base)
-        filepath = os.path.join(base, filename + '.csv')
-        self.dframe.to_csv(filepath, encoding='utf-8')
+        filepath = os.path.join(base, filename)
+        self.dframe.to_csv(filepath, encoding='utf-8', index=False)
 
-        df = self._add_numeric_travel_data(self.dframe.copy())
-        for col in self._special_columns:
-            print('-> {}'.format(col))
-            directory = os.path.join(base, col)
-            if os.path.exists(directory):
-                rmtree(directory)
-            os.mkdir(directory)
+        if all:
+            df = self._add_numeric_travel_data(self.dframe.copy())
+            for col in self._special_columns:
+                print('-> {}'.format(col))
+                directory = os.path.join(base, col)
+                if os.path.exists(directory):
+                    rmtree(directory)
+                os.mkdir(directory)
 
-            for item in df[col].dropna().drop_duplicates():
-                if '_from_' in col:
-                    self._range_writer(df, col, directory)
-                else:
-                    filepath = os.path.join(directory, '{}.csv'.format(item))
-                    df.iloc[:, 4:-4].loc[df[col] == item].to_csv(filepath, encoding='utf-8')
+                for item in df[col].dropna().drop_duplicates():
+                    if '_from_' in col:
+                        self._range_writer(df, col, directory)
+                    else:
+                        filepath = os.path.join(directory, '{}.csv'.format(item))
+                        df.iloc[:, 4:-4].loc[df[col] == item].to_csv(filepath, encoding='utf-8', index=False)
 
 
     def _get_soup(self, url):
@@ -398,7 +401,7 @@ class EALoader(object):
 
 def main():
     ea = EALoader()
-    ea.write_files()
+    ea.write_files(all=True)
 
 
 if __name__ == '__main__':
